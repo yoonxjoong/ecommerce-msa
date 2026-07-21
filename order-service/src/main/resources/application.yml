@@ -1,0 +1,27 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:5432/order_db
+    username: postgres
+    password: postgres
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+
+clients:
+  inventory-service:
+    base-url: ${INVENTORY_SERVICE_URL:http://localhost:8081}
+  payment-service:
+    base-url: ${PAYMENT_SERVICE_URL:http://localhost:8082}
+
+logging:
+  level:
+    com.example.order: DEBUG
