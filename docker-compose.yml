@@ -16,14 +16,17 @@ services:
 
   redis:
     image: redis:7
+    command: redis-server --appendonly yes
     ports:
       - "6379:6379"
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 10
-    mem_limit: 64m
+    mem_limit: 96m
 
   kafka:
     image: apache/kafka:3.7.0
@@ -94,5 +97,21 @@ services:
         condition: service_started
     mem_limit: 300m
 
+  reconciliation-batch:
+    build: ./reconciliation-batch
+    environment:
+      DB_HOST: postgres
+      REDIS_HOST: redis
+      JDK_JAVA_OPTIONS: "-Xmx150m -Xss512k"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      inventory-service:
+        condition: service_started
+    mem_limit: 220m
+
 volumes:
   pgdata:
+  redisdata:
