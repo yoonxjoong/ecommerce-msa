@@ -21,6 +21,8 @@ clients:
     base-url: ${INVENTORY_SERVICE_URL:http://localhost:8081}
   payment-service:
     base-url: ${PAYMENT_SERVICE_URL:http://localhost:8082}
+  waiting-room-service:
+    base-url: ${WAITING_ROOM_SERVICE_URL:http://localhost:8091}
 
 logging:
   level:

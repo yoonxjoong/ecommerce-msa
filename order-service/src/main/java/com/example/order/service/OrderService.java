@@ -2,6 +2,7 @@ package com.example.order.service;
 
 import com.example.order.client.InventoryClient;
 import com.example.order.client.PaymentClient;
+import com.example.order.client.WaitingRoomClient;
 import com.example.order.domain.Order;
 import com.example.order.dto.CreateOrderRequest;
 import com.example.order.dto.OrderResponse;
@@ -26,8 +27,15 @@ public class OrderService {
     private final OrderRepository orderRepository;
     private final InventoryClient inventoryClient;
     private final PaymentClient paymentClient;
+    private final WaitingRoomClient waitingRoomClient;
 
     public OrderResponse createOrder(CreateOrderRequest request) {
+        // 대기열 모드가 아닌 상품은 waiting-room-service가 항상 valid=true로 응답하므로
+        // 평소 주문 흐름에는 사실상 아무 영향이 없다.
+        if (!waitingRoomClient.validate(request.productId(), request.queueToken())) {
+            throw new QueueAccessDeniedException("대기열을 통과하지 못했습니다. 입장 토큰을 확인해주세요.");
+        }
+
         ProductDto product = inventoryClient.getProduct(request.productId());
         long amount = product.price() * request.quantity();
 

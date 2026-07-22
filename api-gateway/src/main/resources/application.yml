@@ -37,6 +37,10 @@ spring:
           uri: ${PAYMENT_SERVICE_URL:http://localhost:8082}
           predicates:
             - Path=/payments/**
+        - id: waiting-room-service
+          uri: ${WAITING_ROOM_SERVICE_URL:http://localhost:8091}
+          predicates:
+            - Path=/queue/**,/admin/queue/**
 
 logging:
   level:

@@ -17,4 +17,9 @@ public class RestClientConfig {
     public RestClient paymentRestClient(@Value("${clients.payment-service.base-url}") String baseUrl) {
         return RestClient.builder().baseUrl(baseUrl).build();
     }
+
+    @Bean
+    public RestClient waitingRoomRestClient(@Value("${clients.waiting-room-service.base-url}") String baseUrl) {
+        return RestClient.builder().baseUrl(baseUrl).build();
+    }
 }

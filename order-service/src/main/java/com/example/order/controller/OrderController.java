@@ -3,8 +3,13 @@ package com.example.order.controller;
 import com.example.order.dto.CreateOrderRequest;
 import com.example.order.dto.OrderResponse;
 import com.example.order.service.OrderService;
+import com.example.order.service.QueueAccessDeniedException;
 import jakarta.validation.Valid;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -27,5 +32,10 @@ public class OrderController {
     @GetMapping("/{orderId}")
     public OrderResponse get(@PathVariable Long orderId) {
         return orderService.getOrder(orderId);
+    }
+
+    @ExceptionHandler(QueueAccessDeniedException.class)
+    public ResponseEntity<Map<String, String>> handleQueueAccessDenied(QueueAccessDeniedException e) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("message", e.getMessage()));
     }
 }

@@ -1,8 +1,8 @@
 # ecommerce-msa
 
 [이커머스 아키텍처 학습 노트](https://yoonxjoong.github.io)에서 다룬 재고 동시성 제어(Redis Lua 원자 연산),
-데이터 정합성(Outbox 패턴 + Saga 보상 트랜잭션), 트래픽 대응(캐싱 + Rate Limiting)을 검증해보기 위한 작은 구현체입니다.
-글의 세 축(트래픽/동시성/정합성) 중 CDN과 가상 대기열만 아직 설계 수준으로 남아있고 나머지는 구현했습니다.
+데이터 정합성(Outbox 패턴 + Saga 보상 트랜잭션), 트래픽 대응(캐싱 + Rate Limiting + 가상 대기열)을 검증해보기 위한 작은 구현체입니다.
+글의 세 축(트래픽/동시성/정합성) 중 CDN만 아직 설계 수준으로 남아있고 나머지는 구현했습니다 (CDN은 정적 자산이 있어야 의미가 있는데, 이 프로젝트엔 프론트엔드/정적 파일이 없어서 범위에서 뺐습니다).
 
 ## 구성
 
@@ -11,6 +11,7 @@
 - **inventory-service** (8081): 상품/재고, Redis Lua 스크립트로 재고 확인+차감 원자 처리, 상품 조회는 Redis Cache-Aside(TTL 30초)
 - **payment-service** (8082): mock 결제 승인, Outbox 패턴으로 이벤트를 Kafka에 발행
 - **notification-service** (포트 없음): Kafka `payment-events`를 구독해서 결제 완료/실패 알림을 로그로 남기는 컨슈머
+- **waiting-room-service** (8091): 특정 상품을 "대기열 모드"로 켜두면, 그 상품 주문 시 입장 토큰이 필요하게 만드는 가상 대기열
 - **reconciliation-batch** (포트 없음): Redis 재고 카운터를 주기적으로 Postgres `product.stock_quantity`에 되돌려 쓰는 배치 (5초 주기)
 
 ## 흐름
@@ -99,9 +100,40 @@ GET 요청(상품 조회, 주문 조회)은 이 제한을 안 받습니다 — `
 
 **Inbox 패턴(중복 처리 방지)**: Kafka는 at-least-once라 같은 이벤트가 재전달될 수 있습니다(리밸런싱, 커밋 전 재시작 등). `processed_event` 테이블에 처리한 `paymentId`를 기록해두고, 이미 처리한 이벤트면 건너뜁니다 (`event_id`가 PK라서 동시 중복 처리도 DB 유니크 제약으로 막힙니다). 실제로 컨슈머 그룹 오프셋을 처음으로 되돌려서 같은 메시지를 강제로 재전달시켜봤는데, 두 번째는 "이미 처리한 이벤트라 건너뜁니다" 로그로 정확히 걸러지는 것까지 확인했습니다.
 
+## 가상 대기열 (waiting-room-service)
+
+블랙프라이데이 같은 특정 이벤트 때만 켜지는 걸 흉내내려고, **상품별로 대기열 모드를 토글**할 수 있게 만들었습니다. 대기열 모드가 아닌 상품은 이 로직 전체를 건너뛰고 항상 통과합니다 (평소 주문 흐름에 영향 없음).
+
+```bash
+# 상품 1을 대기열 모드로 켬 (이벤트 시작)
+curl -X POST http://localhost:8090/admin/queue/1/enable
+
+# 대기열 모드인 상품은 토큰 없이 주문하면 403
+curl -X POST http://localhost:8090/orders -H "Content-Type: application/json" \
+  -d '{"userId":1,"productId":1,"quantity":1,"simulateFailure":false}'
+
+# 대기열 진입 -> ticketId 받음
+curl -X POST http://localhost:8090/queue/1/enter
+
+# 순번 폴링 -> 입장하면 token이 채워져서 옴 (스케줄러가 3초마다 앞에서부터 admission-batch-size만큼 입장시킴)
+curl http://localhost:8090/queue/1/status/{ticketId}
+
+# 받은 토큰으로 주문 (1회용 - 검증 성공하면 즉시 폐기됨)
+curl -X POST http://localhost:8090/orders -H "Content-Type: application/json" \
+  -d '{"userId":1,"productId":1,"quantity":1,"simulateFailure":false,"queueToken":"{token}"}'
+
+# 이벤트 끝나면 다시 끔
+curl -X POST http://localhost:8090/admin/queue/1/disable
+```
+
+**동작 원리**: Redis Sorted Set(`queue:waiting:{productId}`)에 진입 순서대로 쌓아두고, 스케줄러가 주기적으로 앞쪽 일부(`ZPOPMIN`)를 뽑아 짧은 TTL의 입장 토큰을 발급합니다. order-service는 주문 생성 전에 항상 waiting-room-service에 토큰 검증을 요청하는데, 상품이 대기열 모드가 아니면 즉시 통과(`valid:true`)시키고, 모드라면 토큰이 유효한지(그리고 아직 안 쓴 건지) 확인합니다.
+
+**실제로 검증한 것**: 평소 상품 주문(토큰 없이 통과) → 상품 활성화 → 토큰 없이 주문(403) → 대기열 진입 → 3초 뒤 입장 확인(토큰 발급) → 토큰으로 주문(성공) → 같은 토큰 재사용 시도(403, 1회용 확인) → 비활성화 후 다시 토큰 없이 통과. 전 과정을 실제로 돌려서 하나씩 확인했습니다.
+
 ## 알려진 한계 (블로그 글의 "한계 및 남는 궁금증"과 동일한 지점)
 
-- 장바구니, CDN, 가상 대기열은 이번 범위에 포함하지 않았습니다 (캐싱과 Rate Limiting은 구현됨). 장바구니는 애초에 이 프로젝트의 아키텍처 범위에서 뺐습니다 — 주문당 상품 1종만 지원합니다.
+- 장바구니, CDN은 이번 범위에 포함하지 않았습니다 (캐싱, Rate Limiting, 가상 대기열은 구현됨). 장바구니는 애초에 이 프로젝트의 아키텍처 범위에서 뺐습니다 — 주문당 상품 1종만 지원합니다. CDN은 정적 자산이 없는 프로젝트라 적용할 대상 자체가 없습니다.
 - Circuit Breaker, 정산 서비스는 아직 구현하지 않았습니다.
 - 여러 상품이 섞인 주문의 부분 실패 처리는 다루지 않았습니다 (주문당 상품 1종만 지원, 장바구니를 빼서 이 문제 자체가 발생하지 않음).
 - reconciliation-batch는 재동기화 주기(5초) 안에 발생하는 유실은 막지 못합니다 (위 설명 참고).
+- 대기열 비활성화(disable) 시, 이미 대기 중이던 티켓들은 자동으로 입장 처리되지 않습니다 (다음 활성화 때까지 대기열에 남아있음).
