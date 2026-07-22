@@ -1,0 +1,44 @@
+server:
+  port: 8090
+
+spring:
+  application:
+    name: api-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+  cloud:
+    gateway:
+      routes:
+        # POST /orders(구매하기)만 골라서 Rate Limiting을 건다 - 반드시 아래 두 route보다 먼저 와야
+        # Path=/orders + Method=POST 조합이 먼저 매칭된다 (Spring Cloud Gateway는 순서대로 평가함).
+        - id: order-create-rate-limited
+          uri: ${ORDER_SERVICE_URL:http://localhost:8080}
+          predicates:
+            - Path=/orders
+            - Method=POST
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 5
+                redis-rate-limiter.burstCapacity: 5
+                key-resolver: "#{@ipKeyResolver}"
+        # 나머지 주문 관련 요청(GET /orders/{id} 등)은 제한 없이 통과
+        - id: order-service
+          uri: ${ORDER_SERVICE_URL:http://localhost:8080}
+          predicates:
+            - Path=/orders/**
+        - id: inventory-service
+          uri: ${INVENTORY_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/inventory/**
+        - id: payment-service
+          uri: ${PAYMENT_SERVICE_URL:http://localhost:8082}
+          predicates:
+            - Path=/payments/**
+
+logging:
+  level:
+    com.example.gateway: DEBUG
+    org.springframework.cloud.gateway: INFO

@@ -1,13 +1,14 @@
 # ecommerce-msa
 
-[이커머스 아키텍처 학습 노트](https://yoonxjoong.github.io)에서 다룬 재고 동시성 제어(Redis Lua 원자 연산)와
-데이터 정합성(Outbox 패턴 + Saga 보상 트랜잭션)을 검증해보기 위한 작은 구현체입니다.
-글의 세 축(트래픽/동시성/정합성) 중 **동시성 제어 + 정합성** 핵심 흐름만 우선 구현했습니다.
+[이커머스 아키텍처 학습 노트](https://yoonxjoong.github.io)에서 다룬 재고 동시성 제어(Redis Lua 원자 연산),
+데이터 정합성(Outbox 패턴 + Saga 보상 트랜잭션), 트래픽 대응(캐싱 + Rate Limiting)을 검증해보기 위한 작은 구현체입니다.
+글의 세 축(트래픽/동시성/정합성) 중 CDN과 가상 대기열만 아직 설계 수준으로 남아있고 나머지는 구현했습니다.
 
 ## 구성
 
+- **api-gateway** (8090): Spring Cloud Gateway. `POST /orders`(구매하기)에 Redis 기반 Token Bucket Rate Limiting 적용, 나머지는 각 서비스로 라우팅만
 - **order-service** (8080): 주문 생성, Saga 오케스트레이터
-- **inventory-service** (8081): 상품/재고, Redis Lua 스크립트로 재고 확인+차감 원자 처리
+- **inventory-service** (8081): 상품/재고, Redis Lua 스크립트로 재고 확인+차감 원자 처리, 상품 조회는 Redis Cache-Aside(TTL 30초)
 - **payment-service** (8082): mock 결제 승인, Outbox 패턴으로 이벤트를 Kafka에 발행
 - **reconciliation-batch** (포트 없음): Redis 재고 카운터를 주기적으로 Postgres `product.stock_quantity`에 되돌려 쓰는 배치 (5초 주기)
 
@@ -40,14 +41,16 @@ curl http://localhost:8081/inventory/products
 
 ## 주문 생성 예시
 
+order-service(8080)에 직접 호출해도 되고, api-gateway(8090)를 거쳐도 됩니다 (경로는 동일). Rate Limiting을 실제로 테스트하려면 반드시 8090(api-gateway)으로 호출해야 합니다 — order-service 8080에 직접 쏘면 게이트웨이를 안 거치므로 제한이 안 걸립니다.
+
 ```bash
-# 정상 주문
-curl -X POST http://localhost:8080/orders \
+# 정상 주문 (api-gateway 경유)
+curl -X POST http://localhost:8090/orders \
   -H "Content-Type: application/json" \
   -d '{"userId":1,"productId":2,"quantity":1,"simulateFailure":false}'
 
 # 결제 실패 강제 (Saga 보상 확인용)
-curl -X POST http://localhost:8080/orders \
+curl -X POST http://localhost:8090/orders \
   -H "Content-Type: application/json" \
   -d '{"userId":1,"productId":2,"quantity":1,"simulateFailure":true}'
 ```
@@ -75,9 +78,15 @@ inventory-service의 `seedStockCounters()`가 Postgres의 **최초 시딩값**�
 재동기화 주기(5초)와 실제 유실 사이 사이의 간극만큼은 여전히 위험 구간으로 남아있습니다 — 즉 이 방식은
 위험을 줄이는 완화책이지, 완전한 해결책은 아닙니다.
 
+## Rate Limiting (api-gateway)
+
+`POST /orders`에만 Spring Cloud Gateway의 `RequestRateLimiter` + `RedisRateLimiter`를 적용했습니다. IP당 초당 5개 토큰, 버스트 허용치 5로 설정되어 있어서(`api-gateway/src/main/resources/application.yml`), 같은 IP에서 짧은 시간에 여러 번 주문 요청을 보내면 일부는 `429 Too Many Requests`를 받습니다. `RedisRateLimiter`는 내부적으로 Redis Lua 스크립트로 토큰 버킷을 구현하고 있어서, 재고 서비스에서 오버셀링을 막을 때 쓴 것과 같은 원리(Redis + Lua로 원자적 카운터 처리)가 여기서도 그대로 쓰입니다. Redis에 상태를 두기 때문에 게이트웨이를 여러 대로 늘려도 제한량이 일관되게 유지됩니다.
+
+GET 요청(상품 조회, 주문 조회)은 이 제한을 안 받습니다 — `application.yml`의 route 정의에서 `Path=/orders` + `Method=POST` 조합에만 필터를 걸어뒀습니다.
+
 ## 알려진 한계 (블로그 글의 "한계 및 남는 궁금증"과 동일한 지점)
 
-- 장바구니 단계, 캐싱(트래픽 대응 섹션)은 이번 1단계 범위에 포함하지 않았습니다.
+- 장바구니 단계, CDN, 가상 대기열은 이번 범위에 포함하지 않았습니다 (캐싱과 Rate Limiting은 구현됨).
 - Circuit Breaker, 알림/정산 서비스는 구현하지 않았고, Kafka로 발행된 `payment-events`를 소비하는 컨슈머도 아직 없습니다 (Outbox → Kafka 발행까지만 확인 가능).
 - 여러 상품이 섞인 주문의 부분 실패 처리는 다루지 않았습니다 (주문당 상품 1종만 지원).
 - reconciliation-batch는 재동기화 주기(5초) 안에 발생하는 유실은 막지 못합니다 (위 설명 참고).

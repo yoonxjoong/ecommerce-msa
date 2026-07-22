@@ -113,6 +113,27 @@ services:
         condition: service_started
     mem_limit: 220m
 
+  api-gateway:
+    build: ./api-gateway
+    environment:
+      REDIS_HOST: redis
+      ORDER_SERVICE_URL: http://order-service:8080
+      INVENTORY_SERVICE_URL: http://inventory-service:8081
+      PAYMENT_SERVICE_URL: http://payment-service:8082
+      JDK_JAVA_OPTIONS: "-Xmx200m -Xss512k"
+    ports:
+      - "8090:8090"
+    depends_on:
+      redis:
+        condition: service_healthy
+      order-service:
+        condition: service_started
+      inventory-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+    mem_limit: 300m
+
 volumes:
   pgdata:
   redisdata:
