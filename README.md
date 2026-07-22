@@ -10,6 +10,7 @@
 - **order-service** (8080): 주문 생성, Saga 오케스트레이터
 - **inventory-service** (8081): 상품/재고, Redis Lua 스크립트로 재고 확인+차감 원자 처리, 상품 조회는 Redis Cache-Aside(TTL 30초)
 - **payment-service** (8082): mock 결제 승인, Outbox 패턴으로 이벤트를 Kafka에 발행
+- **notification-service** (포트 없음): Kafka `payment-events`를 구독해서 결제 완료/실패 알림을 로그로 남기는 컨슈머
 - **reconciliation-batch** (포트 없음): Redis 재고 카운터를 주기적으로 Postgres `product.stock_quantity`에 되돌려 쓰는 배치 (5초 주기)
 
 ## 흐름
@@ -20,7 +21,8 @@
 4. 결제 성공 → 주문 CONFIRMED
 5. 결제 실패 → **Saga 보상**: inventory-service에 재고 복구 요청 후 주문 CANCELLED(PAYMENT_FAILED)
 6. payment-service는 결제 승인/실패와 Outbox 이벤트 기록을 같은 트랜잭션으로 묶고, 별도 스케줄러(Message Relay)가 주기적으로 읽어 Kafka(`payment-events`)로 발행
-7. reconciliation-batch가 5초마다 Redis의 `stock:product:*` 값을 읽어 Postgres `product.stock_quantity`와 다르면 갱신 — Redis가 데이터를 잃어도(재시작 등) inventory-service가 "최초 시딩값"이 아니라 "마지막으로 동기화된 값"으로 복구되게 함
+7. notification-service가 그 이벤트를 구독해서 결제 완료/실패에 따른 알림 로그를 남김 (실제 발송은 흉내만 냄)
+8. reconciliation-batch가 5초마다 Redis의 `stock:product:*` 값을 읽어 Postgres `product.stock_quantity`와 다르면 갱신 — Redis가 데이터를 잃어도(재시작 등) inventory-service가 "최초 시딩값"이 아니라 "마지막으로 동기화된 값"으로 복구되게 함
 
 ## 실행
 
@@ -84,9 +86,20 @@ inventory-service의 `seedStockCounters()`가 Postgres의 **최초 시딩값**�
 
 GET 요청(상품 조회, 주문 조회)은 이 제한을 안 받습니다 — `application.yml`의 route 정의에서 `Path=/orders` + `Method=POST` 조합에만 필터를 걸어뒀습니다.
 
+## 알림 서비스 (notification-service)
+
+`payment-events` 토픽을 구독해서, 결제 완료면 "배송 준비 알림", 결제 실패면 "주문 취소 알림"을 로그로 남깁니다. 실제 이메일/푸시 발송 대신 로그로 흉내만 냈는데, 실제로 주문을 넣어서 이 로그가 정확히 찍히는 것까지 확인했습니다.
+
+```
+[알림] 주문 1 결제 완료 - 배송 준비 알림을 발송합니다.
+[알림] 주문 2 결제 실패 - 주문 취소 알림을 발송합니다.
+```
+
+이걸로 Outbox → Message Relay → Kafka → 컨슈머까지 파이프라인 전체가 끝까지 이어지는 걸 검증했습니다 (전에는 발행까지만 확인되고 구독자가 없었습니다).
+
 ## 알려진 한계 (블로그 글의 "한계 및 남는 궁금증"과 동일한 지점)
 
-- 장바구니 단계, CDN, 가상 대기열은 이번 범위에 포함하지 않았습니다 (캐싱과 Rate Limiting은 구현됨).
-- Circuit Breaker, 알림/정산 서비스는 구현하지 않았고, Kafka로 발행된 `payment-events`를 소비하는 컨슈머도 아직 없습니다 (Outbox → Kafka 발행까지만 확인 가능).
-- 여러 상품이 섞인 주문의 부분 실패 처리는 다루지 않았습니다 (주문당 상품 1종만 지원).
+- 장바구니, CDN, 가상 대기열은 이번 범위에 포함하지 않았습니다 (캐싱과 Rate Limiting은 구현됨). 장바구니는 애초에 이 프로젝트의 아키텍처 범위에서 뺐습니다 — 주문당 상품 1종만 지원합니다.
+- Circuit Breaker, 정산 서비스는 아직 구현하지 않았습니다.
+- 여러 상품이 섞인 주문의 부분 실패 처리는 다루지 않았습니다 (주문당 상품 1종만 지원, 장바구니를 빼서 이 문제 자체가 발생하지 않음).
 - reconciliation-batch는 재동기화 주기(5초) 안에 발생하는 유실은 막지 못합니다 (위 설명 참고).

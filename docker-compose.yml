@@ -113,6 +113,16 @@ services:
         condition: service_started
     mem_limit: 220m
 
+  notification-service:
+    build: ./notification-service
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      JDK_JAVA_OPTIONS: "-Xmx150m -Xss512k"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    mem_limit: 220m
+
   api-gateway:
     build: ./api-gateway
     environment:

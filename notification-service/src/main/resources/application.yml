@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: notification-service
+  main:
+    web-application-type: none
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: notification-service
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+payment:
+  topic: payment-events
+
+logging:
+  level:
+    com.example.notification: DEBUG
