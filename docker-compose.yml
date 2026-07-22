@@ -116,12 +116,15 @@ services:
   notification-service:
     build: ./notification-service
     environment:
+      DB_HOST: postgres
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       JDK_JAVA_OPTIONS: "-Xmx150m -Xss512k"
     depends_on:
+      postgres:
+        condition: service_healthy
       kafka:
         condition: service_healthy
-    mem_limit: 220m
+    mem_limit: 250m
 
   api-gateway:
     build: ./api-gateway
