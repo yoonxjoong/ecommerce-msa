@@ -4,7 +4,6 @@ import com.example.inventory.domain.Product;
 import com.example.inventory.dto.ReserveRequest;
 import com.example.inventory.dto.RestoreRequest;
 import com.example.inventory.dto.StockResponse;
-import com.example.inventory.repository.ProductRepository;
 import com.example.inventory.service.InventoryService;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -24,18 +23,18 @@ import org.springframework.web.bind.annotation.RestController;
 public class InventoryController {
 
     private final InventoryService inventoryService;
-    private final ProductRepository productRepository;
 
+    /** 상품 목록 - Cache-Aside (30초 TTL), 캐시 히트 시 DB를 안 거침 */
     @GetMapping("/products")
     public List<Product> products() {
-        return productRepository.findAll();
+        return inventoryService.getAllProducts();
     }
 
+    /** 상품 상세 - Cache-Aside (30초 TTL). 여기 포함된 stockQuantity는 실시간 값이 아님 */
     @GetMapping("/products/{productId}")
     public ResponseEntity<Product> product(@PathVariable Long productId) {
-        return productRepository.findById(productId)
-            .map(ResponseEntity::ok)
-            .orElseGet(() -> ResponseEntity.notFound().build());
+        Product product = inventoryService.getProduct(productId);
+        return product != null ? ResponseEntity.ok(product) : ResponseEntity.notFound().build();
     }
 
     @GetMapping("/products/{productId}/stock")
