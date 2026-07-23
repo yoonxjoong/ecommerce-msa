@@ -24,6 +24,18 @@ clients:
   waiting-room-service:
     base-url: ${WAITING_ROOM_SERVICE_URL:http://localhost:8091}
 
+resilience4j:
+  circuitbreaker:
+    instances:
+      paymentService:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 5        # 최근 5번의 호출을 기준으로 판단
+        minimum-number-of-calls: 5    # 최소 5번은 쌓여야 판단 시작
+        failure-rate-threshold: 50    # 그중 50% 이상 실패하면 OPEN
+        wait-duration-in-open-state: 10s   # OPEN 상태 유지 시간
+        permitted-number-of-calls-in-half-open-state: 2  # HALF_OPEN에서 시험 호출 횟수
+        automatic-transition-from-open-to-half-open-enabled: true
+
 logging:
   level:
     com.example.order: DEBUG

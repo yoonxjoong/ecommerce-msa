@@ -62,8 +62,10 @@ public class OrderService {
             log.info("Order {} confirmed", order.getId());
         } else {
             inventoryClient.restore(request.productId(), request.quantity());
-            order.cancel("PAYMENT_FAILED");
-            log.info("Order {} cancelled: payment failed, stock restored", order.getId());
+            // Circuit Breaker가 열려서 아예 호출을 못 한 것과, PG가 실제로 거절한 것을 구분해서 남긴다.
+            String reason = paymentResult.isCircuitOpen() ? "PAYMENT_SERVICE_UNAVAILABLE" : "PAYMENT_FAILED";
+            order.cancel(reason);
+            log.info("Order {} cancelled: {}, stock restored", order.getId(), reason);
         }
 
         orderRepository.save(order);

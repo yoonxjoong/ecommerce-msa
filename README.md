@@ -136,10 +136,27 @@ curl -X POST http://localhost:8090/admin/queue/1/disable
 
 각 단계마다 기대한 HTTP 상태 코드(200/403)가 실제로 나오는지 확인하고, 하나라도 어긋나면 어느 단계인지 콕 집어서 FAIL로 표시합니다.
 
+## Circuit Breaker (order-service → payment-service)
+
+payment-service가 느려지거나 죽었을 때 order-service의 스레드가 그 응답을 무한정 기다리다 고갈되는 걸 막으려고, Resilience4j `@CircuitBreaker`를 `PaymentClient.pay()`에 붙였습니다 (`order-service/.../client/PaymentClient.java`).
+
+```java
+@CircuitBreaker(name = "paymentService", fallbackMethod = "payFallback")
+public PaymentResult pay(Long orderId, Long amount, String idempotencyKey, boolean simulateFailure) {
+    return restClient.post()...
+}
+```
+
+최근 5번 호출 중 50% 이상 실패하면 10초간 OPEN 상태로 전환되고, 그 동안은 실제 호출 없이 즉시 `payFallback`으로 빠져서 `PaymentResult.circuitOpen(orderId)`를 돌려줍니다. OrderService는 이걸 일반 결제 실패와 구분해서 `PAYMENT_SERVICE_UNAVAILABLE` 사유로 주문을 취소하고 재고를 복구합니다 — 즉 **Circuit Breaker의 fallback이 기존 Saga 보상 경로를 그대로 재사용**하는 구조입니다.
+
+**타임아웃도 같이 걸었습니다.** Circuit Breaker는 "예외(실패)가 쌓이는 걸 보고" 판단하는데, RestClient에 타임아웃이 없으면 payment-service가 응답 없이 멈춰있는 상황에서는 호출이 실패로 잡히지도 않고 그냥 무한정 기다립니다 — 정작 막으려던 "스레드가 응답을 기다리다 고갈"되는 상황을 못 막는 셈입니다. `RestClientConfig`에서 모든 클라이언트에 connect timeout 2초, read timeout 3초를 걸어서, 응답이 안 오는 상황도 결국 예외로 터져 Circuit Breaker의 실패율 계산에 들어가게 했습니다.
+
+**한계**: Resilience4j의 CircuitBreaker 상태는 JVM 메모리 안에 있어서, order-service를 여러 인스턴스로 늘리면 인스턴스마다 회로 상태가 따로 놉니다 (Rate Limiting 때처럼 Redis로 상태를 공유하기가 CircuitBreaker 구조상 더 어렵습니다). 또한 Circuit Open을 "결제 실패"로 간주해 재고를 복구하는데, 만약 PG 쪽에서는 실제로 승인이 됐는데 응답만 못 받은 상황이라면 이 로직만으로는 완전하지 않습니다 — Idempotency Key(이미 구현됨)가 이 경우 이중 승인은 막아주지만, "재고가 복구됐는데 실제로는 결제된" 정합성 문제 자체를 없애주지는 않습니다.
+
 ## 알려진 한계 (블로그 글의 "한계 및 남는 궁금증"과 동일한 지점)
 
 - 장바구니, CDN은 이번 범위에 포함하지 않았습니다 (캐싱, Rate Limiting, 가상 대기열은 구현됨). 장바구니는 애초에 이 프로젝트의 아키텍처 범위에서 뺐습니다 — 주문당 상품 1종만 지원합니다. CDN은 정적 자산이 없는 프로젝트라 적용할 대상 자체가 없습니다.
-- Circuit Breaker, 정산 서비스는 아직 구현하지 않았습니다.
+- 정산 서비스는 아직 구현하지 않았습니다.
 - 여러 상품이 섞인 주문의 부분 실패 처리는 다루지 않았습니다 (주문당 상품 1종만 지원, 장바구니를 빼서 이 문제 자체가 발생하지 않음).
 - reconciliation-batch는 재동기화 주기(5초) 안에 발생하는 유실은 막지 못합니다 (위 설명 참고).
 - 대기열 비활성화(disable) 시, 이미 대기 중이던 티켓들은 자동으로 입장 처리되지 않습니다 (다음 활성화 때까지 대기열에 남아있음).
