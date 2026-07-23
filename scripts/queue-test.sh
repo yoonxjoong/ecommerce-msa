@@ -10,6 +10,10 @@ BASE_URL="http://localhost:8090"
 PRODUCT_ID=1
 FAIL=0
 
+# 이 스크립트는 상품 1 재고를 최대 3개까지 실제로 소비한다(정상 주문 2번 + 토큰 주문 1번).
+# 이전 실행에서 재고가 바닥났을 수 있으니, 매번 넉넉하게 리셋하고 시작한다.
+docker exec ecommerce-msa-redis-1 redis-cli SET "stock:product:${PRODUCT_ID}" "100" > /dev/null
+
 check() {
   local description=$1
   local expected=$2

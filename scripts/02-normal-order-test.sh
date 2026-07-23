@@ -1,5 +1,6 @@
 #!/bin/bash
-# 정상 주문 흐름: 재고 확인 -> 결제 승인 -> CONFIRMED.
+# 정상 주문 흐름: 재고 확인 -> 결제 승인 -> CONFIRMED. 실제 클라이언트 경로 그대로
+# api-gateway(GW)를 거쳐서 호출한다.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 source scripts/lib/common.sh

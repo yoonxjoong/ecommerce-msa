@@ -1,5 +1,6 @@
 #!/bin/bash
 # 결제 실패를 강제로 일으켜서 Saga 보상(재고 복구 + 주문 취소)이 실제로 동작하는지 확인.
+# 실제 클라이언트 경로 그대로 api-gateway(GW)를 거쳐서 호출한다.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 source scripts/lib/common.sh

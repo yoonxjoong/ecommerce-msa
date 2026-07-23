@@ -11,13 +11,15 @@ SCRIPTS=(
   scripts/01-cache-test.sh
   scripts/02-normal-order-test.sh
   scripts/03-saga-compensation-test.sh
-  scripts/oversell-test.sh
-  scripts/05-rate-limit-test.sh
   scripts/queue-test.sh
   scripts/07-outbox-kafka-test.sh
   scripts/08-inbox-dedup-test.sh
   scripts/09-circuit-breaker-test.sh
   scripts/10-reconciliation-test.sh
+  # 아래 둘은 일부러 Rate Limiter 토큰 버킷을 바닥까지 긁어내는 테스트라
+  # 맨 뒤에 둬서 다른 테스트가 그 여파를 맞지 않게 한다.
+  scripts/oversell-test.sh
+  scripts/05-rate-limit-test.sh
 )
 
 FAIL=0

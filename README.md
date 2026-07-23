@@ -107,7 +107,7 @@ inventory-service의 `seedStockCounters()`가 Postgres의 **최초 시딩값**�
 
 ## Rate Limiting (api-gateway)
 
-`POST /orders`에만 Spring Cloud Gateway의 `RequestRateLimiter` + `RedisRateLimiter`를 적용했습니다. IP당 초당 5개 토큰, 버스트 허용치 5로 설정되어 있어서(`api-gateway/src/main/resources/application.yml`), 같은 IP에서 짧은 시간에 여러 번 주문 요청을 보내면 일부는 `429 Too Many Requests`를 받습니다. `RedisRateLimiter`는 내부적으로 Redis Lua 스크립트로 토큰 버킷을 구현하고 있어서, 재고 서비스에서 오버셀링을 막을 때 쓴 것과 같은 원리(Redis + Lua로 원자적 카운터 처리)가 여기서도 그대로 쓰입니다. Redis에 상태를 두기 때문에 게이트웨이를 여러 대로 늘려도 제한량이 일관되게 유지됩니다.
+`POST /orders`에만 Spring Cloud Gateway의 `RequestRateLimiter` + `RedisRateLimiter`를 적용했습니다. IP당 초당 10개 토큰, 버스트 허용치 10으로 설정되어 있어서(`api-gateway/src/main/resources/application.yml`), 같은 IP에서 짧은 시간에 여러 번 주문 요청을 보내면 일부는 `429 Too Many Requests`를 받습니다. (처음엔 5/5로 뒀었는데, 테스트 스위트 전체가 같은 IP에서 자연스럽게 호출을 흩뿌리는 것만으로도 종종 걸려서 10/10으로 올렸습니다 — Rate Limiting 자체를 일부러 터뜨리는 테스트는 여전히 이 값을 넘겨서 429를 재현합니다.) `RedisRateLimiter`는 내부적으로 Redis Lua 스크립트로 토큰 버킷을 구현하고 있어서, 재고 서비스에서 오버셀링을 막을 때 쓴 것과 같은 원리(Redis + Lua로 원자적 카운터 처리)가 여기서도 그대로 쓰입니다. Redis에 상태를 두기 때문에 게이트웨이를 여러 대로 늘려도 제한량이 일관되게 유지됩니다.
 
 GET 요청(상품 조회, 주문 조회)은 이 제한을 안 받습니다 — `application.yml`의 route 정의에서 `Path=/orders` + `Method=POST` 조합에만 필터를 걸어뒀습니다.
 

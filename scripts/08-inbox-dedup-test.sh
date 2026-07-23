@@ -15,7 +15,8 @@ docker exec ecommerce-msa-kafka-1 /opt/kafka/bin/kafka-consumer-groups.sh \
   --topic payment-events --reset-offsets --to-earliest --execute > /dev/null
 
 docker compose start notification-service > /dev/null 2>&1
-sleep 15
+echo "notification-service 재기동 대기 중 (25초 - JVM 콜드 스타트 + 밀린 이벤트 재처리 시간)..."
+sleep 25
 
 if docker logs ecommerce-msa-notification-service-1 2>&1 | grep -q "이미 처리한 이벤트라 건너뜁니다"; then
   echo "PASS: Inbox 패턴이 재전달된 이벤트를 중복 처리하지 않음"
