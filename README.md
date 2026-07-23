@@ -14,6 +14,30 @@
 - **waiting-room-service** (8091): 특정 상품을 "대기열 모드"로 켜두면, 그 상품 주문 시 입장 토큰이 필요하게 만드는 가상 대기열
 - **reconciliation-batch** (포트 없음): Redis 재고 카운터를 주기적으로 Postgres `product.stock_quantity`에 되돌려 쓰는 배치 (5초 주기)
 
+## 전체 검증 스크립트
+
+지금까지 다룬 패턴을 전부 순서대로 확인하는 스크립트 모음입니다. `scripts/lib/common.sh`에 공통 함수(`check`, `section`)를 모아두고, 각 파일은 시나리오 하나씩만 담당합니다.
+
+```bash
+./scripts/run-all.sh   # 전부 순서대로 실행
+```
+
+| 파일 | 확인하는 것 |
+| --- | --- |
+| `00-startup.sh` | 전체 스택 빌드+기동 |
+| `01-cache-test.sh` | 상품 조회 캐싱 (DB 접근 1회 이하) |
+| `02-normal-order-test.sh` | 정상 주문 → CONFIRMED |
+| `03-saga-compensation-test.sh` | 결제 실패 → 재고 복구 + CANCELLED |
+| `oversell-test.sh` | 오버셀링 방지 (동시 요청 10건 → 재고 3개만 CONFIRMED) |
+| `05-rate-limit-test.sh` | Rate Limiting (10건 연속 요청 중 429 발생) |
+| `queue-test.sh` | 가상 대기열 전체 생명주기 |
+| `07-outbox-kafka-test.sh` | Outbox → Kafka → notification-service 소비 |
+| `08-inbox-dedup-test.sh` | Inbox 패턴 (오프셋 리셋 후 중복 처리 안 함) |
+| `09-circuit-breaker-test.sh` | Circuit Breaker (payment-service 다운/복구) |
+| `10-reconciliation-test.sh` | 재고 재동기화 배치 (Redis → Postgres) |
+
+Circuit Breaker/Inbox 테스트는 컨테이너를 직접 내렸다 올리는 파괴적인 테스트라, 순서를 지키며 처음부터 끝까지 돌리는 걸 전제로 합니다. `run-all.sh` 없이 파일 하나만 따로 돌리고 싶으면, 그 전 단계까지 스택이 이미 기동돼 있어야 합니다.
+
 ## 흐름
 
 1. `POST /orders` → order-service가 주문을 PENDING으로 생성

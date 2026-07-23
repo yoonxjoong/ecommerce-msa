@@ -1,0 +1,26 @@
+#!/bin/bash
+# Outbox -> Message Relay -> Kafka -> notification-service까지 파이프라인이 끝까지
+# 이어지는지, 새 주문 하나로 알림 로그가 실제로 늘어나는지 확인.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+source scripts/lib/common.sh
+FAIL=0
+
+section "7. Outbox -> Kafka -> notification-service 소비 확인"
+
+BEFORE_COUNT=$(docker logs ecommerce-msa-notification-service-1 2>&1 | grep -c "\[알림\]" || true)
+
+curl -s -X POST "${GW}/orders" -H "Content-Type: application/json" \
+  -d '{"userId":1,"productId":2,"quantity":1,"simulateFailure":false}' > /dev/null
+sleep 3
+
+AFTER_COUNT=$(docker logs ecommerce-msa-notification-service-1 2>&1 | grep -c "\[알림\]" || true)
+
+if [ "$AFTER_COUNT" -gt "$BEFORE_COUNT" ]; then
+  echo "PASS: notification-service가 새 이벤트를 소비함 (${BEFORE_COUNT} -> ${AFTER_COUNT})"
+else
+  echo "FAIL: notification-service 로그가 늘지 않음"
+  FAIL=1
+fi
+
+exit $FAIL
