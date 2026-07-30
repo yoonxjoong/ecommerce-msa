@@ -46,7 +46,7 @@ public class OrderService {
             .amount(amount)
             .build());
 
-        boolean reserved = inventoryClient.reserve(request.productId(), request.quantity());
+        boolean reserved = inventoryClient.reserve(request.productId(), request.quantity(), order.getId());
         if (!reserved) {
             log.info("Order {} cancelled: out of stock", order.getId());
             order.cancel("OUT_OF_STOCK");

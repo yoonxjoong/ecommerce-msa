@@ -25,11 +25,12 @@ public class InventoryClient {
     }
 
     /** 재고 확인 + 차감. 재고 부족(409)이면 false를 반환한다. */
-    public boolean reserve(Long productId, int quantity) {
+    public boolean reserve(Long productId, int quantity, Long orderId) {
         try {
             restClient.post()
                 .uri("/inventory/{id}/reserve", productId)
                 .contentType(MediaType.APPLICATION_JSON)
+                .header("Idempotency-Key", orderId.toString())
                 .body(new QuantityRequest(quantity))
                 .retrieve()
                 .toBodilessEntity();
