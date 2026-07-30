@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -44,8 +45,11 @@ public class InventoryController {
 
     /** 재고 확인 + 차감을 Redis Lua 스크립트로 원자적으로 처리 (오버셀링 방지) */
     @PostMapping("/{productId}/reserve")
-    public ResponseEntity<Void> reserve(@PathVariable Long productId, @RequestBody @Valid ReserveRequest request) {
-        boolean reserved = inventoryService.reserve(productId, request.quantity(), request.idempotencyKey());
+    public ResponseEntity<Void> reserve(
+            @PathVariable Long productId,
+            @RequestBody @Valid ReserveRequest request,
+            @RequestHeader("Idempotency-Key") String idempotencyKey) {
+        boolean reserved = inventoryService.reserve(productId, request.quantity(), idempotencyKey);
         if (!reserved) {
             return ResponseEntity.status(HttpStatus.CONFLICT).build();
         }
