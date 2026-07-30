@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 public class InventoryService {
 
     private static final String STOCK_KEY_PREFIX = "stock:product:";
+    private static final String IDEMPOTENCY_KEY_PREFIX = "idempotency:reserve:";
 
     private final StringRedisTemplate redisTemplate;
     private final RedisScript<Long> decreaseStockScript;
@@ -37,9 +38,10 @@ public class InventoryService {
         });
     }
 
-    public boolean reserve(Long productId, int quantity) {
-        String key = STOCK_KEY_PREFIX + productId;
-        Long result = redisTemplate.execute(decreaseStockScript, List.of(key), String.valueOf(quantity));
+    public boolean reserve(Long productId, int quantity, String idempotencyKey) {
+        String stockKey = STOCK_KEY_PREFIX + productId;
+        String idempotencyRedisKey = IDEMPOTENCY_KEY_PREFIX + idempotencyKey;
+        Long result = redisTemplate.execute(decreaseStockScript, List.of(stockKey, idempotencyRedisKey), String.valueOf(quantity));
         return result != null && result == 1L;
     }
 

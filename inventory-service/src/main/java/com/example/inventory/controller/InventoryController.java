@@ -45,7 +45,7 @@ public class InventoryController {
     /** 재고 확인 + 차감을 Redis Lua 스크립트로 원자적으로 처리 (오버셀링 방지) */
     @PostMapping("/{productId}/reserve")
     public ResponseEntity<Void> reserve(@PathVariable Long productId, @RequestBody @Valid ReserveRequest request) {
-        boolean reserved = inventoryService.reserve(productId, request.quantity());
+        boolean reserved = inventoryService.reserve(productId, request.quantity(), request.idempotencyKey());
         if (!reserved) {
             return ResponseEntity.status(HttpStatus.CONFLICT).build();
         }
