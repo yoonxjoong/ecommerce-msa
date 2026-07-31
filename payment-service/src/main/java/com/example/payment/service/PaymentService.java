@@ -32,8 +32,6 @@ public class PaymentService {
      */
     @Transactional
     public PaymentResponse pay(PaymentRequest request, String idempotencyKey) {
-        String idempotencyRedisKey = PAYMENT_KEY_PREFIX + idempotencyKey;
-
         Optional<Payment> existing = paymentRepository.findByIdempotencyKey(idempotencyKey);
         if (existing.isPresent()) {
             return toResponse(existing.get());

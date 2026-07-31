@@ -3,6 +3,7 @@ package com.example.order.client;
 import com.example.order.dto.PaymentRequestDto;
 import com.example.order.dto.PaymentResult;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
@@ -25,7 +26,8 @@ public class PaymentClient {
      * 시도하지 않고 즉시 payFallback으로 빠져서, order-service의 스레드/커넥션이
      * 응답 없는 payment-service를 기다리다 고갈되는 걸 막는다.
      */
-    @CircuitBreaker(name = "paymentService", fallbackMethod = "payFallback")
+    @Retry(name = "paymentService", fallbackMethod = "payFallback")
+    @CircuitBreaker(name = "paymentService")
     public PaymentResult pay(Long orderId, Long amount, String idempotencyKey, boolean simulateFailure) {
         return restClient.post()
             .uri("/payments")
