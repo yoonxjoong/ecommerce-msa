@@ -19,9 +19,6 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class PaymentService {
 
-    private static final String PAYMENT_KEY_PREFIX = "payment:pay:";
-
-
     private final PaymentRepository paymentRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
@@ -41,7 +38,7 @@ public class PaymentService {
 
         Payment payment = paymentRepository.save(Payment.builder()
             .orderId(request.orderId())
-            .idempotencyKey(request.idempotencyKey())
+            .idempotencyKey(idempotencyKey)
             .amount(request.amount())
             .status(status)
             .build());

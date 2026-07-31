@@ -32,7 +32,8 @@ public class PaymentClient {
         return restClient.post()
             .uri("/payments")
             .contentType(MediaType.APPLICATION_JSON)
-            .body(new PaymentRequestDto(orderId, amount, idempotencyKey, simulateFailure))
+            .header("Idempotency-Key", idempotencyKey)
+            .body(new PaymentRequestDto(orderId, amount, simulateFailure))
             .retrieve()
             .body(PaymentResult.class);
     }
