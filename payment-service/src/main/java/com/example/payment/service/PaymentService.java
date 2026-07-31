@@ -19,6 +19,9 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class PaymentService {
 
+    private static final String PAYMENT_KEY_PREFIX = "payment:pay:";
+
+
     private final PaymentRepository paymentRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
@@ -28,8 +31,10 @@ public class PaymentService {
      * 같은 idempotencyKey로 재시도가 들어와도 중복 승인되지 않도록 먼저 조회한다.
      */
     @Transactional
-    public PaymentResponse pay(PaymentRequest request) {
-        Optional<Payment> existing = paymentRepository.findByIdempotencyKey(request.idempotencyKey());
+    public PaymentResponse pay(PaymentRequest request, String idempotencyKey) {
+        String idempotencyRedisKey = PAYMENT_KEY_PREFIX + idempotencyKey;
+
+        Optional<Payment> existing = paymentRepository.findByIdempotencyKey(idempotencyKey);
         if (existing.isPresent()) {
             return toResponse(existing.get());
         }
