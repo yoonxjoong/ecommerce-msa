@@ -35,6 +35,11 @@ resilience4j:
         wait-duration-in-open-state: 10s   # OPEN 상태 유지 시간
         permitted-number-of-calls-in-half-open-state: 2  # HALF_OPEN에서 시험 호출 횟수
         automatic-transition-from-open-to-half-open-enabled: true
+  bulkhead:
+    instances:
+      paymentService:
+        max-concurrent-calls: 10   # payment-service 호출은 동시에 10건까지만 - 나머지는 즉시 거부
+        max-wait-duration: 0       # 슬롯이 찰 때까지 대기하지 않고 바로 BulkheadFullException
 
 logging:
   level:
