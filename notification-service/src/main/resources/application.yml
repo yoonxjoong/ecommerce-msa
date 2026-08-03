@@ -22,6 +22,9 @@ spring:
 payment:
   topic: payment-events
 
+order:
+  topic: order-events
+
 logging:
   level:
     com.example.notification: DEBUG
