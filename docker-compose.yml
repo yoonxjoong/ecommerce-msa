@@ -4,6 +4,8 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"   # 로컬 개발용 Postgres(5432)와 충돌 방지 - IntelliJ 등에서는 5433으로 접속
     volumes:
       - ./init-db:/docker-entrypoint-initdb.d
       - pgdata:/var/lib/postgresql/data
@@ -97,6 +99,7 @@ services:
     build: ./order-service
     environment:
       DB_HOST: postgres
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       INVENTORY_SERVICE_URL: http://inventory-service:8081
       PAYMENT_SERVICE_URL: http://payment-service:8082
       WAITING_ROOM_SERVICE_URL: http://waiting-room-service:8091
@@ -105,6 +108,8 @@ services:
       - "8080:8080"
     depends_on:
       postgres:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
       inventory-service:
         condition: service_started
