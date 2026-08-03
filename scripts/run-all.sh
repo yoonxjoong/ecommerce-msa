@@ -16,6 +16,7 @@ SCRIPTS=(
   scripts/08-inbox-dedup-test.sh
   scripts/09-circuit-breaker-test.sh
   scripts/10-reconciliation-test.sh
+  scripts/11-bulkhead-test.sh
   # 아래 둘은 일부러 Rate Limiter 토큰 버킷을 바닥까지 긁어내는 테스트라
   # 맨 뒤에 둬서 다른 테스트가 그 여파를 맞지 않게 한다.
   scripts/oversell-test.sh
