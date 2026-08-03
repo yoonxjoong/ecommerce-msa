@@ -7,10 +7,10 @@
 ## 구성
 
 - **api-gateway** (8090): Spring Cloud Gateway. `POST /orders`(구매하기)에 Redis 기반 Token Bucket Rate Limiting 적용, 나머지는 각 서비스로 라우팅만
-- **order-service** (8080): 주문 생성, Saga 오케스트레이터. `payment-events`도 구독해서(Inbox 패턴) 응답을 못 받았던 결제의 최종 확정/취소를 처리하고, PENDING 타임아웃 안전망 스케줄러도 갖고 있음
+- **order-service** (8080): 주문 생성, Saga 오케스트레이터. `payment-events`도 구독해서(Inbox 패턴) 응답을 못 받았던 결제의 최종 확정/취소를 처리하고, PENDING 타임아웃 안전망 스케줄러도 갖고 있음. 타임아웃 취소 시엔 자기 자신도 Outbox로 `order-events`를 발행해서 알림이 가게 함
 - **inventory-service** (8081): 상품/재고, Redis Lua 스크립트로 재고 확인+차감 원자 처리(멱등키 지원), 상품 조회는 Redis Cache-Aside(TTL 30초)
 - **payment-service** (8082): mock 결제 승인, Outbox 패턴으로 이벤트를 Kafka에 발행
-- **notification-service** (포트 없음): Kafka `payment-events`를 구독해서 결제 완료/실패 알림을 로그로 남기는 컨슈머
+- **notification-service** (포트 없음): Kafka `payment-events`, `order-events`를 구독해서 결제/주문 관련 알림을 로그로 남기는 컨슈머
 - **waiting-room-service** (8091): 특정 상품을 "대기열 모드"로 켜두면, 그 상품 주문 시 입장 토큰이 필요하게 만드는 가상 대기열
 - **reconciliation-batch** (포트 없음): Redis 재고 카운터를 주기적으로 Postgres `product.stock_quantity`에 되돌려 쓰는 배치 (5초 주기)
 
@@ -198,7 +198,9 @@ Circuit Open처럼 **응답 자체를 못 받은 경우**, "실패로 간주하�
 - **`PaymentEventListener`** (order-service): payment-service의 Outbox → Kafka(`payment-events`)를 구독합니다. PENDING인 주문에 대해 이 이벤트가 도착하면, 그게 진짜 결과이므로 그때 확정/취소를 결정합니다. notification-service와 동일한 Inbox 패턴(`processed_event` 테이블)으로 멱등 처리했습니다. 이미 동기 응답으로 확정/취소가 끝난 주문(PENDING이 아닌 주문)에 대한 이벤트는 그냥 건너뜁니다.
 - **`PendingOrderTimeoutSweeper`** (order-service): `PaymentEventListener`도 못 잡는 경우가 있습니다 — Circuit이 계속 OPEN이거나 Bulkhead가 계속 꽉 차서 payment-service가 요청 자체를 한 번도 못 받았다면, Payment 레코드도 Outbox 이벤트도 영원히 안 생겨서 주문이 PENDING에 무한정 머무릅니다. 이 스케줄러가 마지막 안전망으로, 일정 시간(기본 30초) 넘게 PENDING인 주문을 찾아 강제로 취소하고 재고를 복구합니다(`PAYMENT_TIMEOUT`).
 
-이 구조는 실제 결제 게이트웨이(Stripe, 토스페이먼츠 등)들이 흔히 쓰는 패턴과 비슷합니다 — 동기 API 호출로 결제를 트리거하고, 최종 확정은 비동기 이벤트(웹훅)로 받는 방식입니다. 완전히 이벤트 기반(요청도 Kafka로)으로 바꾸는 버전은 `choreography-saga-payment` 브랜치에서 별도로 진행 중입니다.
+이 구조는 실제 결제 게이트웨이(Stripe, 토스페이먼츠 등)들이 흔히 쓰는 패턴과 비슷합니다 — 동기 API 호출로 결제를 트리거하고, 최종 확정은 비동기 이벤트(웹훅)로 받는 방식입니다.
+
+**타임아웃으로 취소된 주문도 고객에게 알림이 갑니다.** `PendingOrderTimeoutSweeper`가 처리하는 주문은 payment-service가 요청 자체를 못 받은 경우라, `payment-events`가 원천적으로 안 생겨서 notification-service가 반응할 이벤트가 없었습니다. 그래서 order-service에도 payment-service와 동일한 Outbox 패턴(`OutboxEvent`, `OutboxRelay`, `KafkaProducerConfig`)을 추가해서, 취소할 때 `OrderCancelled` 이벤트를 `order-events` 토픽으로 발행합니다. notification-service의 `OrderEventListener`가 이걸 구독해서(같은 Inbox 패턴으로 멱등 처리) 취소 알림을 남깁니다.
 
 ## 알려진 한계
 
