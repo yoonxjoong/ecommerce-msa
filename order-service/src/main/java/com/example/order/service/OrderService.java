@@ -64,14 +64,22 @@ public class OrderService {
         PaymentResult paymentResult = paymentClient.pay(order.getId(), amount, idempotencyKey, request.simulateFailure());
 
         if (paymentResult.isApproved()) {
+            // 응답을 확실히 받았다 - 그 자리에서 바로 확정해도 안전하다.
             order.confirm();
             log.info("Order {} confirmed", order.getId());
+        } else if (paymentResult.isCircuitOpen()) {
+            // 응답 자체를 못 받았다 - payment-service가 실제로 처리했는지 못 했는지 알 방법이
+            // 없으므로, 여기서 바로 실패로 간주해서 재고를 복구하면 "사실은 결제가 성공했었는데
+            // 재고만 복구해버리는" 정합성 사고가 날 수 있다. 그래서 취소하지 않고 PENDING으로
+            // 남겨두고, PaymentEventListener가 payment-events(Outbox 경유, 신뢰 가능한 소스)를
+            // 보고 실제 결과에 따라 확정/취소를 결정하게 한다.
+            log.info("Order {} 응답 없음(Circuit Open) - PENDING 유지, payment-events 이벤트로 추후 확정/취소",
+                    order.getId());
         } else {
+            // PG가 명시적으로 거절한 경우 - 이것도 응답을 확실히 받은 것이므로 바로 처리해도 안전하다.
             inventoryClient.restore(request.productId(), request.quantity());
-            // Circuit Breaker가 열려서 아예 호출을 못 한 것과, PG가 실제로 거절한 것을 구분해서 남긴다.
-            String reason = paymentResult.isCircuitOpen() ? "PAYMENT_SERVICE_UNAVAILABLE" : "PAYMENT_FAILED";
-            order.cancel(reason);
-            log.info("Order {} cancelled: {}, stock restored", order.getId(), reason);
+            order.cancel("PAYMENT_FAILED");
+            log.info("Order {} cancelled: PAYMENT_FAILED, stock restored", order.getId());
         }
 
         orderRepository.save(order);

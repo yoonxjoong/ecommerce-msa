@@ -15,6 +15,20 @@ spring:
     properties:
       hibernate:
         format_sql: true
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: order-service
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+payment:
+  topic: payment-events
+
+order:
+  pending-timeout-seconds: 30      # 이 시간 넘게 PENDING이면 payment-events가 끝내 안 온 것으로 보고 강제 취소
+  pending-sweep-interval-ms: 10000 # 위 타임아웃 주문을 몇 ms마다 훑을지
 
 clients:
   inventory-service:
