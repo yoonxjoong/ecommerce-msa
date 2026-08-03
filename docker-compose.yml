@@ -18,7 +18,7 @@ services:
     image: redis:7
     command: redis-server --appendonly yes
     ports:
-      - "6379:6379"
+      - "6380:6379"   # 로컬 개발용 Redis(6379)와 충돌 방지 - 컨테이너 내부 포트는 그대로 6379
     volumes:
       - redisdata:/data
     healthcheck:
@@ -49,6 +49,19 @@ services:
       timeout: 10s
       retries: 10
     mem_limit: 500m
+
+  # 브라우저에서 토픽/메시지/컨슈머 그룹을 눈으로 확인하기 위한 GUI. http://localhost:8089
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    ports:
+      - "8089:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    mem_limit: 300m
 
   inventory-service:
     build: ./inventory-service
