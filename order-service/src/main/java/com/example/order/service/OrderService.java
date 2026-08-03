@@ -30,9 +30,13 @@ public class OrderService {
     private final WaitingRoomClient waitingRoomClient;
 
     public OrderResponse createOrder(CreateOrderRequest request) {
+        log.info("주문 생성 요청: userId={}, productId={}, quantity={}, simulateFailure={}",
+                request.userId(), request.productId(), request.quantity(), request.simulateFailure());
+
         // 대기열 모드가 아닌 상품은 waiting-room-service가 항상 valid=true로 응답하므로
         // 평소 주문 흐름에는 사실상 아무 영향이 없다.
         if (!waitingRoomClient.validate(request.productId(), request.queueToken())) {
+            log.info("대기열 토큰 검증 실패: productId={}", request.productId());
             throw new QueueAccessDeniedException("대기열을 통과하지 못했습니다. 입장 토큰을 확인해주세요.");
         }
 
@@ -45,6 +49,7 @@ public class OrderService {
             .quantity(request.quantity())
             .amount(amount)
             .build());
+        log.info("주문 {} 생성됨(PENDING), amount={}. 재고 확인 단계로 진행", order.getId(), amount);
 
         boolean reserved = inventoryClient.reserve(request.productId(), request.quantity(), order.getId());
         if (!reserved) {
@@ -53,6 +58,7 @@ public class OrderService {
             orderRepository.save(order);
             return OrderResponse.from(order);
         }
+        log.info("주문 {} 재고 확보 완료. 결제 단계로 진행", order.getId());
 
         String idempotencyKey = "order-" + order.getId();
         PaymentResult paymentResult = paymentClient.pay(order.getId(), amount, idempotencyKey, request.simulateFailure());

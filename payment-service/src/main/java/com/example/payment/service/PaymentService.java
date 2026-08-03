@@ -12,10 +12,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Map;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class PaymentService {
 
@@ -29,8 +31,13 @@ public class PaymentService {
      */
     @Transactional
     public PaymentResponse pay(PaymentRequest request, String idempotencyKey) {
+        log.info("결제 요청 수신: orderId={}, amount={}, idempotencyKey={}",
+                request.orderId(), request.amount(), idempotencyKey);
+
         Optional<Payment> existing = paymentRepository.findByIdempotencyKey(idempotencyKey);
         if (existing.isPresent()) {
+            log.info("멱등 재전달 감지, 기존 결제 결과 그대로 반환: paymentId={}, status={}",
+                    existing.get().getId(), existing.get().getStatus());
             return toResponse(existing.get());
         }
 
@@ -42,6 +49,9 @@ public class PaymentService {
             .amount(request.amount())
             .status(status)
             .build());
+
+        log.info("결제 처리 완료: paymentId={}, orderId={}, status={}",
+                payment.getId(), payment.getOrderId(), status);
 
         String eventType = status == PaymentStatus.APPROVED ? "PaymentCompleted" : "PaymentFailed";
         outboxEventRepository.save(OutboxEvent.builder()

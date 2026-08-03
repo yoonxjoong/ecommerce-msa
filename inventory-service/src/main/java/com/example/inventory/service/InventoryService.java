@@ -42,12 +42,22 @@ public class InventoryService {
         String stockKey = STOCK_KEY_PREFIX + productId;
         String idempotencyRedisKey = IDEMPOTENCY_KEY_PREFIX + idempotencyKey;
         Long result = redisTemplate.execute(decreaseStockScript, List.of(stockKey, idempotencyRedisKey), String.valueOf(quantity));
-        return result != null && result == 1L;
+        boolean reserved = result != null && result == 1L;
+        log.info("재고 예약 요청: productId={}, quantity={}, idempotencyKey={} -> result={}({})",
+                productId, quantity, idempotencyKey, result,
+                result == null ? "REDIS 오류" : switch (result.intValue()) {
+                    case 1 -> "성공(또는 멱등 재전달)";
+                    case 0 -> "재고 부족";
+                    case -1 -> "재고 키 없음";
+                    default -> "알 수 없음";
+                });
+        return reserved;
     }
 
     public void restore(Long productId, int quantity) {
         String key = STOCK_KEY_PREFIX + productId;
         redisTemplate.execute(increaseStockScript, List.of(key), String.valueOf(quantity));
+        log.info("재고 복구: productId={}, quantity={}", productId, quantity);
     }
 
     public long getAvailableStock(Long productId) {

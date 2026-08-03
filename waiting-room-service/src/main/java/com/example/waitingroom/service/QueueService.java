@@ -86,6 +86,7 @@ public class QueueService {
             return ValidateResponse.ok();
         }
         if (token == null || token.isBlank()) {
+            log.info("상품 {} 대기열 검증 실패: 토큰 없음", productId);
             return ValidateResponse.fail("NO_TOKEN");
         }
         // 검증에 성공하면 즉시 삭제해서 같은 토큰을 두 번 못 쓰게 한다 (1회용 입장권)
@@ -93,6 +94,7 @@ public class QueueService {
         if (Boolean.TRUE.equals(deleted)) {
             return ValidateResponse.ok();
         }
+        log.info("상품 {} 대기열 검증 실패: 유효하지 않거나 만료/이미 사용된 토큰", productId);
         return ValidateResponse.fail("INVALID_OR_EXPIRED_TOKEN");
     }
 
