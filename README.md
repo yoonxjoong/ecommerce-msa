@@ -7,8 +7,8 @@
 ## 구성
 
 - **api-gateway** (8090): Spring Cloud Gateway. `POST /orders`(구매하기)에 Redis 기반 Token Bucket Rate Limiting 적용, 나머지는 각 서비스로 라우팅만
-- **order-service** (8080): 주문 생성, Saga 오케스트레이터
-- **inventory-service** (8081): 상품/재고, Redis Lua 스크립트로 재고 확인+차감 원자 처리, 상품 조회는 Redis Cache-Aside(TTL 30초)
+- **order-service** (8080): 주문 생성, Saga 오케스트레이터. `payment-events`도 구독해서(Inbox 패턴) 응답을 못 받았던 결제의 최종 확정/취소를 처리하고, PENDING 타임아웃 안전망 스케줄러도 갖고 있음
+- **inventory-service** (8081): 상품/재고, Redis Lua 스크립트로 재고 확인+차감 원자 처리(멱등키 지원), 상품 조회는 Redis Cache-Aside(TTL 30초)
 - **payment-service** (8082): mock 결제 승인, Outbox 패턴으로 이벤트를 Kafka에 발행
 - **notification-service** (포트 없음): Kafka `payment-events`를 구독해서 결제 완료/실패 알림을 로그로 남기는 컨슈머
 - **waiting-room-service** (8091): 특정 상품을 "대기열 모드"로 켜두면, 그 상품 주문 시 입장 토큰이 필요하게 만드는 가상 대기열
@@ -33,21 +33,23 @@
 | `queue-test.sh` | 가상 대기열 전체 생명주기 |
 | `07-outbox-kafka-test.sh` | Outbox → Kafka → notification-service 소비 |
 | `08-inbox-dedup-test.sh` | Inbox 패턴 (오프셋 리셋 후 중복 처리 안 함) |
-| `09-circuit-breaker-test.sh` | Circuit Breaker (payment-service 다운/복구) |
+| `09-circuit-breaker-test.sh` | Circuit Breaker (payment-service 다운 → PENDING 유지 → 타임아웃 정리 → 복구) |
 | `10-reconciliation-test.sh` | 재고 재동기화 배치 (Redis → Postgres) |
+| `11-bulkhead-test.sh` | Bulkhead (동시 15건 중 10건만 실제 호출, 나머지는 즉시 거부) |
 
 Circuit Breaker/Inbox 테스트는 컨테이너를 직접 내렸다 올리는 파괴적인 테스트라, 순서를 지키며 처음부터 끝까지 돌리는 걸 전제로 합니다. `run-all.sh` 없이 파일 하나만 따로 돌리고 싶으면, 그 전 단계까지 스택이 이미 기동돼 있어야 합니다.
 
 ## 흐름
 
 1. `POST /orders` → order-service가 주문을 PENDING으로 생성
-2. inventory-service에 재고 확인+차감 요청 (Redis Lua, 원자 연산) — 실패하면 주문 CANCELLED(OUT_OF_STOCK)
-3. payment-service에 결제 요청 (mock PG, Idempotency Key로 중복 방지)
-4. 결제 성공 → 주문 CONFIRMED
-5. 결제 실패 → **Saga 보상**: inventory-service에 재고 복구 요청 후 주문 CANCELLED(PAYMENT_FAILED)
+2. inventory-service에 재고 확인+차감 요청 (Redis Lua, 원자 연산, 멱등키로 재시도 시 이중 차감 방지) — 실패하면 주문 CANCELLED(OUT_OF_STOCK)
+3. payment-service에 결제 요청 (mock PG, Idempotency Key를 `Idempotency-Key` 헤더로 전달해 중복 방지, Retry+CircuitBreaker+Bulkhead로 감쌈)
+4. 응답을 **확실히 받은 경우**(승인 또는 PG의 명시적 거절) → 그 자리에서 바로 CONFIRMED 또는 **Saga 보상**(재고 복구 후 CANCELLED)
+5. 응답 자체를 **못 받은 경우**(Circuit Open 등) → 즉시 실패로 간주하지 않고 PENDING 유지 (payment-service가 실제로는 처리했는데 응답만 유실됐을 수 있어서) — 아래 "결제 확정 하이브리드 Saga" 참고
 6. payment-service는 결제 승인/실패와 Outbox 이벤트 기록을 같은 트랜잭션으로 묶고, 별도 스케줄러(Message Relay)가 주기적으로 읽어 Kafka(`payment-events`)로 발행
 7. notification-service가 그 이벤트를 구독해서 결제 완료/실패에 따른 알림 로그를 남김 (실제 발송은 흉내만 냄)
-8. reconciliation-batch가 5초마다 Redis의 `stock:product:*` 값을 읽어 Postgres `product.stock_quantity`와 다르면 갱신 — Redis가 데이터를 잃어도(재시작 등) inventory-service가 "최초 시딩값"이 아니라 "마지막으로 동기화된 값"으로 복구되게 함
+8. order-service도 같은 이벤트를 구독해서, 4번에서 결정 못 하고 PENDING으로 남아있던 주문을 이때 최종 확정/취소함
+9. reconciliation-batch가 5초마다 Redis의 `stock:product:*` 값을 읽어 Postgres `product.stock_quantity`와 다르면 갱신 — Redis가 데이터를 잃어도(재시작 등) inventory-service가 "최초 시딩값"이 아니라 "마지막으로 동기화된 값"으로 복구되게 함
 
 ## 실행
 
@@ -60,6 +62,12 @@ docker compose up --build
 ```bash
 curl http://localhost:8081/inventory/products
 ```
+
+**로컬 개발 편의 도구**
+
+- Postgres: `localhost:5433`으로 IntelliJ/DBeaver 등에서 직접 접속 가능 (`order_db`/`inventory_db`/`payment_db`/`notification_db`, 계정 `postgres`/`postgres`). 로컬에 다른 Postgres가 떠있는 경우와 충돌 안 나게 5432가 아닌 5433으로 매핑해뒀습니다.
+- Redis: `localhost:6380` (컨테이너 내부는 6379 그대로라 서비스 간 통신엔 영향 없음, 마찬가지로 로컬 Redis와의 충돌 방지용)
+- Kafka: `docker compose up -d kafka-ui` 후 브라우저에서 `http://localhost:8089` — 토픽/메시지/컨슈머 그룹 랙을 GUI로 확인 가능
 
 ## 시드 데이터
 
@@ -160,27 +168,44 @@ curl -X POST http://localhost:8090/admin/queue/1/disable
 
 각 단계마다 기대한 HTTP 상태 코드(200/403)가 실제로 나오는지 확인하고, 하나라도 어긋나면 어느 단계인지 콕 집어서 FAIL로 표시합니다.
 
-## Circuit Breaker (order-service → payment-service)
+## Circuit Breaker + Retry + Bulkhead (order-service → payment-service)
 
-payment-service가 느려지거나 죽었을 때 order-service의 스레드가 그 응답을 무한정 기다리다 고갈되는 걸 막으려고, Resilience4j `@CircuitBreaker`를 `PaymentClient.pay()`에 붙였습니다 (`order-service/.../client/PaymentClient.java`).
+payment-service가 느려지거나 죽었을 때 order-service의 스레드/자원이 그 응답을 기다리다 고갈되는 걸 막으려고, `PaymentClient.pay()`에 Resilience4j 세 개를 같이 붙였습니다 (`order-service/.../client/PaymentClient.java`).
 
 ```java
-@CircuitBreaker(name = "paymentService", fallbackMethod = "payFallback")
+@Retry(name = "paymentService", fallbackMethod = "payFallback")
+@CircuitBreaker(name = "paymentService")
+@Bulkhead(name = "paymentService")
 public PaymentResult pay(Long orderId, Long amount, String idempotencyKey, boolean simulateFailure) {
     return restClient.post()...
 }
 ```
 
-최근 5번 호출 중 50% 이상 실패하면 10초간 OPEN 상태로 전환되고, 그 동안은 실제 호출 없이 즉시 `payFallback`으로 빠져서 `PaymentResult.circuitOpen(orderId)`를 돌려줍니다. OrderService는 이걸 일반 결제 실패와 구분해서 `PAYMENT_SERVICE_UNAVAILABLE` 사유로 주문을 취소하고 재고를 복구합니다 — 즉 **Circuit Breaker의 fallback이 기존 Saga 보상 경로를 그대로 재사용**하는 구조입니다.
+- **CircuitBreaker**: 최근 5번 호출 중 50% 이상 실패하면 10초간 OPEN으로 전환, 그동안은 실제 호출 없이 즉시 실패 처리.
+- **Bulkhead**: payment-service 호출은 동시에 10건까지만 허용, 초과분은 대기 없이 즉시 거부 — Circuit이 아직 CLOSED라 실패율로 못 잡아내는 "그냥 느리기만 한" 상황에서도 이 호출 하나가 order-service의 자원을 무제한으로 잠식하지 못하게 막습니다.
+- **Retry**: 실패하면 재시도. 처음엔 `@Retry`를 `@CircuitBreaker` 안쪽에 두고 fallback도 CircuitBreaker에 뒀었는데, 그러면 CircuitBreaker가 실패를 예외 대신 값으로 삼켜버려서 바깥의 Retry가 실패 자체를 못 보는 버그가 있었습니다 — fallback은 반드시 합성 구조의 제일 바깥쪽(Retry)에 둬야 안쪽 레이어들이 제 역할을 할 기회를 가집니다. 이 함정은 [Circuit Breaker 전용 블로그 글](https://yoonxjoong.github.io/posts/circuit-breaker-resilience4j/)과 [circuit-breaker-lab](https://github.com/yoonxjoong/circuit-breaker-lab)에 따로 정리했습니다.
 
-**타임아웃도 같이 걸었습니다.** Circuit Breaker는 "예외(실패)가 쌓이는 걸 보고" 판단하는데, RestClient에 타임아웃이 없으면 payment-service가 응답 없이 멈춰있는 상황에서는 호출이 실패로 잡히지도 않고 그냥 무한정 기다립니다 — 정작 막으려던 "스레드가 응답을 기다리다 고갈"되는 상황을 못 막는 셈입니다. `RestClientConfig`에서 모든 클라이언트에 connect timeout 2초, read timeout 3초를 걸어서, 응답이 안 오는 상황도 결국 예외로 터져 Circuit Breaker의 실패율 계산에 들어가게 했습니다.
+**타임아웃도 같이 걸었습니다.** CircuitBreaker는 "예외(실패)가 쌓이는 걸 보고" 판단하는데, RestClient에 타임아웃이 없으면 payment-service가 응답 없이 멈춰있는 상황에서는 호출이 실패로 잡히지도 않고 그냥 무한정 기다립니다. `RestClientConfig`에서 모든 클라이언트에 connect timeout 2초, read timeout 3초를 걸어서, 응답이 안 오는 상황도 결국 예외로 터져 실패율 계산에 들어가게 했습니다.
 
-**한계**: Resilience4j의 CircuitBreaker 상태는 JVM 메모리 안에 있어서, order-service를 여러 인스턴스로 늘리면 인스턴스마다 회로 상태가 따로 놉니다 (Rate Limiting 때처럼 Redis로 상태를 공유하기가 CircuitBreaker 구조상 더 어렵습니다). 또한 Circuit Open을 "결제 실패"로 간주해 재고를 복구하는데, 만약 PG 쪽에서는 실제로 승인이 됐는데 응답만 못 받은 상황이라면 이 로직만으로는 완전하지 않습니다 — Idempotency Key(이미 구현됨)가 이 경우 이중 승인은 막아주지만, "재고가 복구됐는데 실제로는 결제된" 정합성 문제 자체를 없애주지는 않습니다.
+**한계**: Resilience4j의 상태는 전부 JVM 메모리 안에 있어서, order-service를 여러 인스턴스로 늘리면 인스턴스마다 회로/슬롯 상태가 따로 놉니다 (Rate Limiting 때처럼 Redis로 상태를 공유하기가 이 구조상 더 어렵습니다).
 
-## 알려진 한계 (블로그 글의 "한계 및 남는 궁금증"과 동일한 지점)
+## 결제 확정 하이브리드 Saga — 응답 유실 시 정합성 처리
+
+Circuit Open처럼 **응답 자체를 못 받은 경우**, "실패로 간주하고 재고를 복구"해버리면 위험한 시나리오가 있습니다: payment-service는 실제로 결제를 승인해서 DB에 커밋까지 끝냈는데, 그 응답만 네트워크에서 유실된 경우입니다. 이러면 order-service는 결제가 실패했다고 착각하고 재고를 복구+주문을 취소하는데, 실제로는 결제가 성공한 상태라 정합성이 깨집니다. Idempotency Key는 "같은 요청을 두 번 보냈을 때 이중 승인되는 것"만 막아주지, 이 문제 자체는 못 막아줍니다.
+
+그래서 응답을 확실히 받은 경우(승인/명시적 거절)만 그 자리에서 바로 처리하고, **응답을 못 받은 경우는 주문을 CANCELLED로 단정하지 않고 PENDING으로 남겨서** 두 갈래로 정리합니다.
+
+- **`PaymentEventListener`** (order-service): payment-service의 Outbox → Kafka(`payment-events`)를 구독합니다. PENDING인 주문에 대해 이 이벤트가 도착하면, 그게 진짜 결과이므로 그때 확정/취소를 결정합니다. notification-service와 동일한 Inbox 패턴(`processed_event` 테이블)으로 멱등 처리했습니다. 이미 동기 응답으로 확정/취소가 끝난 주문(PENDING이 아닌 주문)에 대한 이벤트는 그냥 건너뜁니다.
+- **`PendingOrderTimeoutSweeper`** (order-service): `PaymentEventListener`도 못 잡는 경우가 있습니다 — Circuit이 계속 OPEN이거나 Bulkhead가 계속 꽉 차서 payment-service가 요청 자체를 한 번도 못 받았다면, Payment 레코드도 Outbox 이벤트도 영원히 안 생겨서 주문이 PENDING에 무한정 머무릅니다. 이 스케줄러가 마지막 안전망으로, 일정 시간(기본 30초) 넘게 PENDING인 주문을 찾아 강제로 취소하고 재고를 복구합니다(`PAYMENT_TIMEOUT`).
+
+이 구조는 실제 결제 게이트웨이(Stripe, 토스페이먼츠 등)들이 흔히 쓰는 패턴과 비슷합니다 — 동기 API 호출로 결제를 트리거하고, 최종 확정은 비동기 이벤트(웹훅)로 받는 방식입니다. 완전히 이벤트 기반(요청도 Kafka로)으로 바꾸는 버전은 `choreography-saga-payment` 브랜치에서 별도로 진행 중입니다.
+
+## 알려진 한계
 
 - 장바구니, CDN은 이번 범위에 포함하지 않았습니다 (캐싱, Rate Limiting, 가상 대기열은 구현됨). 장바구니는 애초에 이 프로젝트의 아키텍처 범위에서 뺐습니다 — 주문당 상품 1종만 지원합니다. CDN은 정적 자산이 없는 프로젝트라 적용할 대상 자체가 없습니다.
 - 정산 서비스는 아직 구현하지 않았습니다.
 - 여러 상품이 섞인 주문의 부분 실패 처리는 다루지 않았습니다 (주문당 상품 1종만 지원, 장바구니를 빼서 이 문제 자체가 발생하지 않음).
 - reconciliation-batch는 재동기화 주기(5초) 안에 발생하는 유실은 막지 못합니다 (위 설명 참고).
 - 대기열 비활성화(disable) 시, 이미 대기 중이던 티켓들은 자동으로 입장 처리되지 않습니다 (다음 활성화 때까지 대기열에 남아있음).
+- `resilience4j.retry.instances.paymentService` 설정을 따로 안 둬서, `@Retry`가 Resilience4j 기본값(최대 시도 3회, 고정 간격 500ms)을 그대로 씁니다. 백오프/지터가 없어서 retry-storm 글에서 다룬 "naive 재시도" 패턴에 더 가깝습니다.
+- `PendingOrderTimeoutSweeper`는 타임아웃된 주문을 취소만 하지, payment-service에 재시도를 걸어보진 않습니다. Resilience4j의 재시도가 이미 소진된 뒤라 재시도보다는 포기 후 정리가 맞다고 판단했지만, payment-service가 그사이 복구됐다면 불필요하게 취소되는 주문이 있을 수 있습니다.
