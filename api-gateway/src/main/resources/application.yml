@@ -21,8 +21,8 @@ spring:
           filters:
             - name: RequestRateLimiter
               args:
-                redis-rate-limiter.replenishRate: 10
-                redis-rate-limiter.burstCapacity: 10
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 20
                 key-resolver: "#{@ipKeyResolver}"
         # 나머지 주문 관련 요청(GET /orders/{id} 등)은 제한 없이 통과
         - id: order-service

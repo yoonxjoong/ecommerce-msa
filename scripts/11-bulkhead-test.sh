@@ -11,9 +11,9 @@
 #   - 나머지 5건은 슬롯이 꽉 차서 시도조차 못 해보고 즉시(0.x초) 튕겨나감
 # 그래서 "즉시 실패한 건수"를 세어보면 Bulkhead가 실제로 동작하는지 알 수 있다.
 #
-# api-gateway(8090)가 아니라 order-service(8080)에 직접 쏜다 - gateway를 거치면
-# Rate Limiter(초당 10개)가 같이 걸려서 "빠른 실패"의 원인이 Bulkhead인지
-# Rate Limiter인지 구분이 안 된다.
+# 실제 클라이언트 경로 그대로 api-gateway(GW)를 거쳐서 호출한다. gateway의
+# Rate Limiter(초당 20개, 버스트 20)가 동시 15건은 전부 통과시킬 만큼 여유 있게
+# 설정돼 있어서, "빠른 실패"가 Rate Limiter가 아니라 Bulkhead 때문이라고 볼 수 있다.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 source scripts/lib/common.sh
@@ -22,7 +22,6 @@ FAIL=0
 section "11. Bulkhead - payment-service 응답 지연 상황에서 동시 호출 제한"
 
 CONCURRENT_REQUESTS=15
-DIRECT_ORDER="http://localhost:8080"
 
 echo "payment-service를 일시정지시킵니다 (kill이 아니라 pause - 응답만 못 하게)..."
 docker compose pause payment-service > /dev/null 2>&1
@@ -33,7 +32,7 @@ for i in $(seq 1 "$CONCURRENT_REQUESTS"); do
   (
     # curl -w로 요청 하나가 실제로 몇 초 걸렸는지를 응답 바디 뒤에 이어붙여서 파일로 저장.
     # 이 시간이 "즉시 실패(Bulkhead)"와 "타임아웃까지 기다림(진짜 시도)"을 구분하는 근거가 된다.
-    curl -s -w "\n%{time_total}" -X POST "${DIRECT_ORDER}/orders" \
+    curl -s -w "\n%{time_total}" -X POST "${GW}/orders" \
       -H "Content-Type: application/json" \
       -d "{\"userId\":${i},\"productId\":2,\"quantity\":1,\"simulateFailure\":false}" \
       > "${RESULT_DIR}/result_${i}.txt"
@@ -66,5 +65,13 @@ echo "즉시 실패(Bulkhead로 추정): ${FAST}건 / 시도 후 타임아웃(�
 
 check "동시 ${CONCURRENT_REQUESTS}건 중 즉시 튕긴 건수 5건 (Bulkhead 슬롯 10 초과분)" "5" "$FAST" || FAIL=1
 
-rm -rf "${RESULT_DIR}"
+if [ "$FAIL" -ne 0 ]; then
+  echo
+  echo "예상과 다르게 나와서, 실제 응답 예시 하나를 같이 남깁니다 (원인 파악용):"
+  cat "${RESULT_DIR}/result_1.txt"
+  echo
+  echo "전체 응답은 ${RESULT_DIR} 에 남겨뒀습니다 (실패 시엔 자동 삭제하지 않음)."
+else
+  rm -rf "${RESULT_DIR}"
+fi
 exit $FAIL
